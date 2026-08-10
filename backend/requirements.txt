@@ -1,0 +1,8 @@
+nemo_toolkit[asr]
+huggingface_hub
+torchaudio
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+numpy

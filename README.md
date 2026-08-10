@@ -12,21 +12,22 @@ Frontend (React + Vite)                     อัดเสียงด้วย
                                                         |
                                               ส่งไฟล์เสียงแบบ Multipart
                                                         |
-Backend (Node.js + Express + Multer)                 รับไฟล์เสียง —> เรียกใช้ AI Model
+Backend (FastAPI)                            รับไฟล์เสียง —> เรียกใช้ AI Model
                                                         |
                                                 ส่งผลลัพธ์กลับเป็นข้อความ
                                                         |
                                                 Frontend แสดงผลลัพธ์
 ```
+โปรเจกต์นี้เลือกใช้ FastAPI เป็น Backend ตัวเดียว 
 
 ### Tech Stack
 ---
 | ส่วน | เทคโนโลยี |
 | --- | --- |
 | Frontend | React (vite) + JavaScript |
-| Backend | Node.js + Express |
+| Backend | FastAPI (Python) |
 | อัดเสียง | MediaRecorder API (built-in browser) |
-| รับไฟล์ | Multer |
+| รับไฟล์ | FastAPI |
 | Deploy Frontend | Vercel |
 | Deploy Backend | Render |
 
@@ -34,7 +35,8 @@ Backend (Node.js + Express + Multer)                 รับไฟล์เส
 ---
 
 #### สิ่งที่ต้องมีก่อน
-* [Node.js] (https://nodejs.org/) (แนะนำใช้ v18 ขึ้นไป)
+* [Node.js] (https://nodejs.org/) (แนะนำใช้ v18 ขึ้นไป) — สำหรับรัน Frontend (Vite)
+* [Python] (https://www.python.org/) (แนะนำใช้ 3.10 ขึ้นไป) — สำหรับรัน Backend (FastAPI)
 * Git
 * Editor (แนะนำให้ใช้ VS Code)
 
@@ -66,54 +68,54 @@ Backend (Node.js + Express + Multer)                 รับไฟล์เส
    ``` bash
    mkdir backend
    cd backend
-   npm init -y # create package.json
-   npm install express multer cors dotenv # install library
-   npm install -D nodemon
+   python -m venv venv
+   source venv/bin/activate   # Windows ใช้ venv\Scripts\activate
+   pip install fastapi uvicorn python-multipart python-dotenv
    ```
    > **อธิบายเพิ่ม**
-   > - `express` = framework สำหรับสร้างเซิร์ฟเวอร์
-   > - `multer` = ตัวช่วยรับไฟล์ (เช่นไฟล์เสียง) ที่ส่งมาจาก Frontend
-   > - `cors` = อนุญาตให้ Frontend (คนละ port/domain) เรียก Backend ได้
-   > - `dotenv` = โหลดค่าลับ เช่น API Key จากไฟล์ `.env`
-   > - `nodemon` = รัน server แล้ว auto-restart ทุกครั้งที่แก้โค้ด (ใช้ตอน dev เท่านั้น)
+   > - `fastapi` = framework สำหรับสร้างเซิร์ฟเวอร์
+   > - `uvicorn` = ASGI server สำหรับรัน FastAPI
+   > - `python-multipart` = จำเป็นสำหรับให้ FastAPI รับไฟล์ (เช่นไฟล์เสียง) ที่ส่งมาจาก Frontend
+   > - `python-dotenv` = โหลดค่าลับ เช่น API Key จากไฟล์ .env
 
-   เปิดไฟล์ `package.json` แล้วเพิ่ม script `dev`
-   ```json
-   "scripts": {
-      "dev": "nodemon index.js"
-   }
-   ```
-   สร้างไฟล์ `index.js` แล้ววางโค้ดนี้
-   ```js
-   require('dotenv').config(); // โหลดค่าจาก .env เข้ามาใช้ในโปรเจกต์
-   const express = require('express');
-   const cors = require('cors');
-   const multer = require('multer');
- 
-   const app = express();
-   const upload = multer({ limits: { fileSize: 10 * 1024 * 1024 } }); // จำกัดไฟล์ไม่เกิน 10MB
- 
-   app.use(cors()); // เปิดให้ Frontend เรียก API นี้ได้
- 
-   // เส้นทางทดสอบ เข้าเว็บแล้วควรเห็นข้อความนี้
-   app.get('/', (req, res) => res.send('Backend is running'));
- 
-   // เส้นทางหลัก: รับไฟล์เสียงจาก Frontend (field ชื่อ 'audio')
-   app.post('/api/transcribe', upload.single('audio'), (req, res) => {
-      // TODO: ส่งไฟล์ไปให้ AI model แล้วส่งผลลัพธ์กลับ
-      // หมายเหตุ: ปกติตรงนี้จะเรียกใช้ AI Speech-to-Text เช่น OpenAI Whisper API
-      // แต่ในตัวอย่างนี้ยังไม่ได้เชื่อมต่อจริง เพื่อให้เห็นโครงสร้างของระบบก่อน
-      res.json({ text: 'placeholder result' });
-   });
- 
-   const PORT = process.env.PORT || 5000;
-   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+   สร้างไฟล์ `main.py` แล้ววางโค้ดนี้
+   ```python
+   from fastapi import FastAPI, UploadFile, File
+   from fastapi.middleware.cors import CORSMiddleware
+   from dotenv import load_dotenv
+   import os
+   
+   load_dotenv()  # โหลดค่าจาก .env เข้ามาใช้ในโปรเจกต์
+   
+   app = FastAPI()
+   
+   # เปิดให้ Frontend เรียก API นี้ได้
+   app.add_middleware(
+      CORSMiddleware,
+      allow_origins=["*"],  # ตอน production ควรระบุ origin ที่แน่นอน
+      allow_methods=["*"],
+      allow_headers=["*"],
+   )
+   
+   # เส้นทางทดสอบ เข้าเว็บแล้วควรเห็นข้อความนี้
+   @app.get("/")
+   def read_root():
+      return {"message": "Backend is running"}
+   
+   # เส้นทางหลัก: รับไฟล์เสียงจาก Frontend
+   @app.post("/api/transcribe")
+   async def transcribe(audio: UploadFile = File(...)):
+      # TODO: ส่งไฟล์ไปให้ AI model แล้วส่งผลลัพธ์กลับ
+      # หมายเหตุ: ปกติตรงนี้จะเรียกใช้ AI Speech-to-Text เช่น Whisper
+      # แต่ในตัวอย่างนี้ยังไม่ได้เชื่อมต่อจริง เพื่อให้เห็นโครงสร้างของระบบก่อน
+      return {"text": "placeholder result"}
    ```
 
    สร้างไฟล์ `.env.example` (ใส่ค่าที่จำเป็นเข้าไปที่นี่)
    ```bash
-   PORT=5000
-   API_KEY=your_ai_model_api_key_here
+   PORT=8000
+   MODEL_REPO_ID=your_model_repo_id_here
+   MODEL_FILENAME=your_model_filename_here
    ```
 
    สร้างไฟล์ `.env` จาก `.env.example` แล้วใส่ค่าจริง
@@ -123,7 +125,7 @@ Backend (Node.js + Express + Multer)                 รับไฟล์เส
 
    รัน backend
    ```bash
-   npm run dev
+   uvicorn main:app --reload --port 8000
    ```
    เปิด Browser ไปที่ http://localhost:5000 (หรือ port ที่ตั้งค่าไว้ใน .env)
 
@@ -134,7 +136,7 @@ Backend (Node.js + Express + Multer)                 รับไฟล์เส
 
    เช็คว่า setup สำเร็จ
    - Frontend รันที่ `http://localhost:5173` แล้วเห็นหน้าเว็บ
-   - Backend รันที่ `http://localhost:5000` แล้วเห็นคำว่า `Backend is running`
+   - Backend รันที่ `http://localhost:8000` แล้วเห็นคำว่า `{ "message": "AI Voice App Backend is running!", "model_status": "loaded" }`
    - ทั้งสอง terminal รันพร้อมกันได้โดยไม่มี error
 
 #### คู่มือแบบละเอียด
