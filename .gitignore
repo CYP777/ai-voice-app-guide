@@ -1,10 +1,10 @@
 # ==========================
 # Backend
 # ==========================
-/backend/node_modules
+venv/
+__pycache__/
+*.pyc
 .env
-.env.local
-.env.*.local
 
 # ==========================
 # Frontend (Vite)
