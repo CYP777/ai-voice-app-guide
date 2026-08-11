@@ -18,7 +18,7 @@ Backend (FastAPI)                            รับไฟล์เสีย�
                                                         |
                                                 Frontend แสดงผลลัพธ์
 ```
-โปรเจกต์นี้เลือกใช้ FastAPI เป็น Backend ตัวเดียว 
+โปรเจกต์นี้เลือกใช้ FastAPI เป็น Backend ตัวเดียว โดยถอดเสียงแบบ real-time ผ่าน WebSocket endpoint (/ws/transcribe) เป็นหลัก และมี REST endpoint (/transcribe) ไว้สำหรับอัปโหลดไฟล์เสียงทั้งไฟล์แยกต่างหาก
 
 ### Tech Stack
 ---
@@ -26,8 +26,10 @@ Backend (FastAPI)                            รับไฟล์เสีย�
 | --- | --- |
 | Frontend | React (vite) + JavaScript |
 | Backend | FastAPI (Python) |
+| AI Model | NVIDIA NeMo ASR (โหลดผ่าน Hugging Face Hub) |
 | อัดเสียง | MediaRecorder API (built-in browser) |
-| รับไฟล์ | FastAPI |
+| รับเสียงแบบ real-time | WebSocket |
+| แปลงไฟล์เสียง | FFmpeg |
 | Deploy Frontend | Vercel |
 | Deploy Backend | Render |
 
@@ -37,6 +39,7 @@ Backend (FastAPI)                            รับไฟล์เสีย�
 #### สิ่งที่ต้องมีก่อน
 * [Node.js] (https://nodejs.org/) (แนะนำใช้ v18 ขึ้นไป) — สำหรับรัน Frontend (Vite)
 * [Python] (https://www.python.org/) (แนะนำใช้ 3.10 ขึ้นไป) — สำหรับรัน Backend (FastAPI)
+* FFmpeg — ต้องติดตั้งและอยู่ใน PATH ของเครื่อง ใช้แปลงไฟล์เสียงจาก browser ให้เป็น .wav ก่อนส่งเข้าโมเดล
 * Git
 * Editor (แนะนำให้ใช้ VS Code)
 
@@ -51,6 +54,10 @@ Backend (FastAPI)                            รับไฟล์เสีย�
    npm create vite@latest [frontend-folder-name] -- --template react
    cd [frontend-folder-name]
    npm install # or npm i
+   ```
+   สร้างไฟล์ `.env.example`
+   ```bash
+   VITE_WS_URL=ws://localhost:8000/ws/transcribe
    ```
    สร้างไฟล์ `.env` จาก `.env.example`
    ```bash
@@ -77,6 +84,8 @@ Backend (FastAPI)                            รับไฟล์เสีย�
    > - `uvicorn` = ASGI server สำหรับรัน FastAPI
    > - `python-multipart` = จำเป็นสำหรับให้ FastAPI รับไฟล์ (เช่นไฟล์เสียง) ที่ส่งมาจาก Frontend
    > - `python-dotenv` = โหลดค่าลับ เช่น API Key จากไฟล์ .env
+   > - `nemo_toolkit[asr]`, `torch`, `torchaudio`, `huggingface_hub`, `numpy`, `soundfile` = ใช้โหลดและรันโมเดล Speech-to-Text (NeMo ASR) จาก Hugging Face
+   > กลุ่มนี้เป็น dependency ที่ค่อนข้างหนัก (โดยเฉพาะ torch และ nemo_toolkit) ใช้เวลาติดตั้งนานและกินพื้นที่หลาย GB เตรียมใจไว้ก่อน
 
    สร้างไฟล์ `main.py` แล้ววางโค้ดนี้
    ```python
@@ -127,7 +136,7 @@ Backend (FastAPI)                            รับไฟล์เสีย�
    ```bash
    uvicorn main:app --reload --port 8000
    ```
-   เปิด Browser ไปที่ http://localhost:5000 (หรือ port ที่ตั้งค่าไว้ใน .env)
+   เปิด Browser ไปที่ http://localhost:8000 (หรือ port ที่ตั้งค่าไว้ใน .env)
 
 4. **สำคัญ**: ห้าม commit ไฟล์ `.env` ขึ้น GitHub เด็ดขาด เพราะจะทำให้ API Key หลุด
    > **ทำไมถึงห้าม?** ไฟล์ `.env` มี API Key ที่เป็นความลับอยู่ ถ้าใครเอา Key นี้ไปใช้ อาจทำให้เจ้าของ Key
@@ -150,10 +159,17 @@ Backend (FastAPI)                            รับไฟล์เสีย�
 ---
 ดูตัวอย่างที่ `.env.example` ในแต่ละโฟลเดอร์ **ห้าม commit ไฟล์ `.env` จริงขึ้น GitHub เด็ดขาด**
 
+Backend (`backend/.env.example`)
 | ตัวแปร | คำอธิบาย |
 |---|---|
-| `API_KEY` | Key สำหรับเรียกใช้ AI Model |
-| `PORT` | พอร์ตที่ backend รัน |
+| `PORT` | พอร์ตที่ backend รัน (ค่า default 8000) |
+| `MODEL_REPO_ID` | Repo ID ของโมเดล NeMo ASR บน Hugging Face Hub |
+| `MODEL_FILENAME` | ชื่อไฟล์ checkpoint ของโมเดลใน repo นั้น |
+
+Frontend (`frontend/.env.example`)
+| ตัวแปร | คำอธิบาย |
+|---|---|
+| `VITE_WS_URL` | URL ของ WebSocket endpoint บน backend เช่น `ws://localhost:8000/ws/transcribe` |
 
 ### Roadmap
 * [x] อัดเสียงและส่งไฟล์ได้
