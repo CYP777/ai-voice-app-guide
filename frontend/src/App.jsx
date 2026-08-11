@@ -1,89 +1,95 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import './App.css'; // นำเข้าไฟล์ CSS ที่เราแยกไว้
 
-function App() {
+export default function App() {
   const [isRecording, setIsRecording] = useState(false);
-  const [result, setResult] = useState('');
-  const [loading, setLoading] = useState(false);
-
+  const [text, setText] = useState('');
+    
+  const wsRef = useRef(null);
   const mediaRecorderRef = useRef(null);
-  const chunksRef = useRef([]);
 
-  const apiUrl = import.meta.env.VITE_API_URL;
-
-  // เริ่มอัดเสียง
-  const startRecording = async () => {
-    // ขอ permission ใช้ไมโครโฟน
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mediaRecorder = new MediaRecorder(stream);
-    mediaRecorderRef.current = mediaRecorder;
-    chunksRef.current = [];
-
-    // ทุกครั้งที่มีข้อมูลเสียงเข้ามา เก็บใส่ chunks
-    mediaRecorder.ondataavailable = (e) => {
-      chunksRef.current.push(e.data);
+  // 1. ตั้งค่าและเชื่อมต่อ WebSocket เมื่อเปิดหน้าเว็บ
+  useEffect(() => {
+    const wsUrl = import.meta.env.VITE_WS_URL;
+    wsRef.current = new WebSocket(wsUrl);
+    wsRef.current.onopen = () => console.log('WebSocket Connected');
+    wsRef.current.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.text) {
+        setText(data.text);
+        speakThai(data.text);
+      }
     };
+    wsRef.current.onclose = () => console.log('WebSocket Disconnected');
 
-    // เมื่อหยุดอัด รวม chunks เป็นไฟล์แล้วส่งไป backend
-    mediaRecorder.onstop = async () => {
-      const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
-      await sendAudio(audioBlob);
-      // ปิดไมค์หลังใช้เสร็จ
-      stream.getTracks().forEach((track) => track.stop());
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
     };
+  }, []);
 
-    mediaRecorder.start();
-    setIsRecording(true);
+  // 2. ฟังก์ชันอ่านออกเสียง
+  const speakThai = (textToSpeak) => {
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+    utterance.lang = 'th-TH';
+    utterance.rate = 1.0;
+    window.speechSynthesis.speak(utterance);
   };
 
-  // หยุดอัดเสียง
-  const stopRecording = () => {
-    mediaRecorderRef.current.stop();
-    setIsRecording(false);
-  };
+  // 3. ฟังก์ชันจัดการปุ่มอัดเสียง
+  // 3. ฟังก์ชันจัดการปุ่มอัดเสียง
+  const toggleRecording = async () => {
+    if (isRecording) {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
+      setIsRecording(false);
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const options = { mimeType: 'audio/mp4' }; 
+        const mediaRecorder = new MediaRecorder(stream, options);
+        mediaRecorderRef.current = mediaRecorder;
+        
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send("CLEAR");
+        }
 
-  // ส่งไฟล์เสียงไป backend
-  const sendAudio = async (audioBlob) => {
-    setLoading(true);
-    setResult('');
-
-    const formData = new FormData();
-    formData.append('audio', audioBlob, 'recording.webm');
-
-    try {
-      const response = await fetch(`${apiUrl}/api/transcribe`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) throw new Error('Request failed');
-
-      const data = await response.json();
-      setResult(data.text);
-    } catch (err) {
-      setResult('เกิดข้อผิดพลาด: ' + err.message);
-    } finally {
-      setLoading(false);
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(event.data);
+          }
+        };
+        mediaRecorder.start(1000);
+        setIsRecording(true);
+        setText('กำลังฟัง...');
+      } catch (err) {
+        console.error("Error accessing microphone:", err);
+        alert("กรุณาอนุญาตการใช้งานไมโครโฟนในเบราว์เซอร์");
+      }
     }
   };
 
   return (
-    <div style={{ padding: '2rem', fontFamily: 'kanit, sans-serif' }}>
-      <h1>AI Voice to Text</h1>
-
-      <button onClick={isRecording ? stopRecording : startRecording}>
-        {isRecording ? '⏹ หยุดอัด' : '🎙 เริ่มอัดเสียง'}
-      </button>
-
-      {loading && <p>กำลังประมวลผล...</p>}
-
-      {result && (
-        <div style={{ marginTop: '1rem' }}>
-          <strong>ผลลัพธ์:</strong>
-          <p>{result}</p>
-        </div>
-      )}
+    <div className="app-container">
+      <h2 className="header-title">AI Voice Interface</h2>
+      <p className="subtitle">Real-time speech to text processing</p>
+      <div className="controls-wrapper">
+        <button 
+          onClick={toggleRecording}
+          className={`record-button ${isRecording ? 'recording' : 'idle'}`}
+        >
+        {isRecording ? 'หยุดอัดเสียง' : 'เริ่มการบันทึกเสียง'}
+        </button>
+      </div>
+          
+      <div className="result-container">
+        <span className="result-label">Transcription Result</span>
+        <p className="result-text">
+          {text || ''}
+        </p>
+      </div>
     </div>
   );
 }
-
-export default App;

@@ -1,6 +1,8 @@
 import os
 import logging
 import tempfile
+import subprocess
+import shutil
 
 import torch
 import torchaudio
@@ -52,46 +54,33 @@ asr = asr.to(device)
 logger.info("Model loaded on device: %s", device)
 
 
-# --- ฟังก์ชันจัดการเสียงและถอดความ (เหมือนเดิม) ---
-
-def _load_audio(audio_path: str):
-    """Load audio robustly. Fall back to soundfile if torchaudio fails."""
-    try:
-        wav, sr = torchaudio.load(audio_path)
-    except Exception as exc:
-        logger.warning("torchaudio.load failed (%s), falling back to soundfile", exc)
-        data, sr = sf.read(audio_path, dtype="float32", always_2d=True)
-        wav = torch.from_numpy(np.ascontiguousarray(data.T))
-    return wav, sr
-
+# --- ฟังก์ชันจัดการเสียงและถอดความ ---
 
 def transcribe(audio_path: str) -> str:
-    wav, sr = _load_audio(audio_path)
-
-    if sr != 16000:
-        wav = torchaudio.functional.resample(wav, sr, 16000)
-
-    if wav.shape[0] > 1:
-        wav = wav.mean(dim=0, keepdim=True)
-
-    with torch.no_grad():
-        logits, logits_len, _ = asr.forward(
-            input_signal=wav.to(device),
-            input_signal_length=torch.tensor(
-                [wav.shape[1]],
-                device=device
-            )
-        )
-        preds = asr.decoding.decode(
-            logits,
-            logits_len
-        )
-
-    if not preds:
+    """ฟังก์ชันหลักสำหรับถอดความเสียงเป็นข้อความ"""
+    try:
+        result = asr.transcribe([audio_path])
+        
+        if isinstance(result, tuple):
+            result = result[0]
+            
+        if not result or len(result) == 0:
+            return ""
+            
+        text_output = result[0]
+        
+        if isinstance(text_output, str):
+            return text_output
+        elif hasattr(text_output, "text"):
+            return text_output.text
+        elif isinstance(text_output, list) and len(text_output) > 0:
+            return str(text_output[0])
+        else:
+            return str(text_output)
+            
+    except Exception as exc:
+        logger.warning(f"ASR Transcription failed: {exc}")
         return ""
-
-    result = preds[0]
-    return result.text if hasattr(result, "text") else result
 
 
 # --- API Endpoints ---
@@ -108,7 +97,7 @@ def health():
         "model_loaded": asr is not None,
     }
 
-# 1. Endpoint สำหรับอัปโหลดไฟล์ (แบบเก่า)[cite: 1]
+# 1. Endpoint สำหรับอัปโหลดไฟล์ (แยกออกมาให้ถูกต้องแล้ว)
 @app.post("/transcribe")
 async def transcribe_api(audio: UploadFile = File(...)):
     if not audio.filename:
@@ -137,7 +126,7 @@ async def transcribe_api(audio: UploadFile = File(...)):
             os.remove(temp_path)
 
 
-# 2. Endpoint ใหม่ สำหรับทำ Real-time ผ่าน WebSocket
+# 2. Endpoint สำหรับทำ Real-time ผ่าน WebSocket
 @app.websocket("/ws/transcribe")
 async def websocket_transcribe(websocket: WebSocket):
     await websocket.accept()
@@ -148,31 +137,57 @@ async def websocket_transcribe(websocket: WebSocket):
 
     try:
         while True:
-            # รับข้อมูลเสียงจากหน้าบ้าน (Frontend ต้องส่งเป็น Raw Bytes)
-            chunk = await websocket.receive_bytes()
-            audio_buffer.extend(chunk)
+            # รับข้อมูลจากหน้าเว็บ (รับได้ทั้งข้อความและเสียง)
+            message = await websocket.receive()
             
-            temp_path = None
-            try:
-                # บันทึก buffer ปัจจุบันลงไฟล์ชั่วคราวเพื่อนำไปให้โมเดลอ่าน
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp:
-                    temp.write(audio_buffer)
-                    temp_path = temp.name
+            # ถ้ารับคำสั่ง CLEAR ให้ล้าง Buffer
+            if "text" in message and message["text"] == "CLEAR":
+                audio_buffer.clear()
+                logger.info("Audio buffer cleared by client")
+                continue
                 
-                # ถอดความข้อความจากเสียงที่สะสมไว้ทั้งหมด
-                text = transcribe(temp_path)
+            # ถ้ารับเป็นไฟล์เสียง ให้เอาไปสะสมต่อ
+            if "bytes" in message:
+                chunk = message["bytes"]
+                audio_buffer.extend(chunk)
+            else:
+                continue # ถ้าไม่ใช่ทั้ง text และ bytes ให้ข้ามไป
+            
+            # ถ้ามีข้อมูลเสียงแล้ว ค่อยเอาไปแปลงไฟล์
+            if len(audio_buffer) > 0:
+                temp_in_path = None
+                temp_out_path = None
                 
-                # ส่งข้อความกลับไปที่ Frontend
-                await websocket.send_json({"text": text})
-                
-            except Exception as e:
-                logger.warning(f"Partial transcription error (waiting for more data): {e}")
-            finally:
-                # ลบไฟล์ชั่วคราวทิ้งทุกครั้งที่ประมวลผลเสร็จในรอบนั้นๆ
-                if temp_path and os.path.exists(temp_path):
-                    os.remove(temp_path)
+                try:
+                    # 1. บันทึกเสียงที่รับมาลงไฟล์ชั่วคราวต้นฉบับ
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_in:
+                        temp_in.write(audio_buffer)
+                        temp_in_path = temp_in.name
+                    
+                    # 2. ตั้งชื่อไฟล์ปลายทางเป็น .wav
+                    temp_out_path = temp_in_path + ".wav"
+                    
+                    # 3. สั่ง Windows ให้ใช้ FFmpeg แปลงไฟล์ให้เป็น .wav แบบ 16kHz
+                    subprocess.run([
+                        "ffmpeg.exe", "-y", "-i", temp_in_path, 
+                        "-ar", "16000", "-ac", "1", temp_out_path
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True)
+                    
+                    # 4. ส่งไฟล์ .wav ที่บริสุทธิ์ไปให้ AI ถอดความ
+                    if os.path.exists(temp_out_path):
+                        text = transcribe(temp_out_path)
+                        print(f"======== ข้อความที่ AI ได้: '{text}' ========")
+                        await websocket.send_json({"text": text})
+                    
+                except Exception as e:
+                    logger.warning(f"Partial transcription error: {e}")
+                finally:
+                    # ลบไฟล์ชั่วคราวทิ้งเสมอ
+                    if temp_in_path and os.path.exists(temp_in_path):
+                        os.remove(temp_in_path)
+                    if temp_out_path and os.path.exists(temp_out_path):
+                        os.remove(temp_out_path)
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
-        # เมื่อผู้ใช้กดปิดไมค์หรือปิดเว็บ ให้ล้าง Buffer
         audio_buffer.clear()
